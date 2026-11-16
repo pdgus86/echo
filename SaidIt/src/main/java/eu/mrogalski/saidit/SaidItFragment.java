@@ -428,11 +428,9 @@ public class SaidItFragment extends Fragment {
                                         .setPositiveButton("Save", new DialogInterface.OnClickListener() {
                                             @Override
                                             public void onClick(DialogInterface dialog, int which) {
-                                                if(fileName.getText().toString().length() > 0){
-                                                    echo.dumpRecording(seconds, new PromptFileReceiver(getActivity()),fileName.getText().toString());
-                                                } else {
-                                                    Toast.makeText(getActivity(), "Please enter a file name", Toast.LENGTH_SHORT).show();
-                                                }
+                                                // Leaving the name empty saves with a date-and-time name,
+                                                // e.g. Echo_2026-11-16_09-27-45.wav
+                                                echo.dumpRecording(seconds, new PromptFileReceiver(getActivity()), fileName.getText().toString());
                                             }
                                         })
                                         .setNegativeButton("Cancel", null)
