@@ -128,4 +128,29 @@
 <b>MP4</b> - oferuje wysoką jakość i dobrą kompresję ale podobnie jak 3GP, szybko zużywa energię.</string>
     -->
 
+    <!-- Home-screen widget -->
+    <string name="widget_description">Start, pause, stop and save Echo recordings from your home screen.</string>
+    <string name="widget_start">▶ Start</string>
+    <string name="widget_pause">❚❚ Pause</string>
+    <string name="widget_stop">■ Stop</string>
+    <string name="widget_save">⬇ Save</string>
+    <string name="widget_start_icon" translatable="false">▶</string>
+    <string name="widget_pause_icon" translatable="false">❚❚</string>
+    <string name="widget_stop_icon" translatable="false">■</string>
+    <string name="widget_save_icon" translatable="false">⬇</string>
+    <string name="widget_start_desc">Start or resume recording</string>
+    <string name="widget_pause_desc">Pause recording</string>
+    <string name="widget_stop_desc">Stop and save recording</string>
+    <string name="widget_save_desc">Save recording and keep going</string>
+    <string name="widget_status_recording">● Recording</string>
+    <string name="widget_status_paused">❚❚ Paused</string>
+    <string name="widget_status_listening">Echo on (memory only)</string>
+    <string name="widget_status_stopped">■ Stopped</string>
+    <string name="widget_started">Echo: recording started</string>
+    <string name="widget_resumed">Echo: recording resumed</string>
+    <string name="widget_paused">Echo: paused</string>
+    <string name="widget_not_running">Echo is not running</string>
+    <string name="widget_saved">Saved %1$s</string>
+    <string name="recording_name_hint">Leave empty for a date and time name</string>
+    <string name="nothing_to_save">Nothing to save yet</string>
 </resources>
