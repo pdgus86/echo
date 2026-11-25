@@ -60,6 +60,11 @@ public class SaidItService extends Service {
     static final String ACTION_WIDGET_PAUSE = "eu.mrogalski.saidit.action.WIDGET_PAUSE";
     static final String ACTION_WIDGET_STOP = "eu.mrogalski.saidit.action.WIDGET_STOP";
     static final String ACTION_WIDGET_SAVE = "eu.mrogalski.saidit.action.WIDGET_SAVE";
+    static final String ACTION_WIDGET_DELETE = "eu.mrogalski.saidit.action.WIDGET_DELETE";
+
+    // Second tap on Delete must arrive within this window, or the first tap is ignored.
+    private static final long DELETE_CONFIRM_WINDOW_MS = 3000;
+    private long deleteConfirmUntil = 0;
 
     // Save "everything in memory" (clamped to what is actually buffered).
     static final float ALL_MEMORY_SECONDS = 60 * 60 * 24 * 365;
@@ -587,6 +592,9 @@ public class SaidItService extends Service {
 
     private void handleWidgetAction(String action) {
         Log.d(TAG, "Widget action: " + action);
+        if (!ACTION_WIDGET_DELETE.equals(action)) {
+            deleteConfirmUntil = 0;
+        }
         switch (action) {
             case ACTION_WIDGET_START:
                 widgetStart();
@@ -599,6 +607,9 @@ public class SaidItService extends Service {
                 break;
             case ACTION_WIDGET_SAVE:
                 widgetSave();
+                break;
+            case ACTION_WIDGET_DELETE:
+                widgetDelete();
                 break;
         }
         if (state != STATE_READY) {
@@ -664,6 +675,67 @@ public class SaidItService extends Service {
         if (wasRecording) {
             // Continue into a fresh file so the recording carries on.
             startRecording(0);
+        }
+    }
+
+    /**
+     * Delete: throw away the unsaved recording and the memory buffer, then stop recording.
+     * Already-saved files in the library are left alone.
+     * The first tap only asks for confirmation; a second tap within 3 seconds does the delete.
+     */
+    void widgetDelete() {
+        if (state == STATE_READY) {
+            deleteConfirmUntil = 0;
+            showToast(getString(R.string.widget_nothing_to_delete));
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (now > deleteConfirmUntil) {
+            deleteConfirmUntil = now + DELETE_CONFIRM_WINDOW_MS;
+            showToast(getString(R.string.widget_tap_again_to_delete));
+            return;
+        }
+        deleteConfirmUntil = 0;
+
+        pauseRequested = false;
+        if (state == STATE_RECORDING) {
+            state = STATE_LISTENING;
+            audioHandler.post(() -> {
+                flushAudioRecord();
+                closeAndDeleteUnsavedFile();
+                audioMemory.clear();
+                paused = false;
+            });
+            final SharedPreferences preferences = this.getSharedPreferences(PACKAGE_NAME, MODE_PRIVATE);
+            if (!preferences.getBoolean(AUDIO_MEMORY_ENABLED_KEY, true)) {
+                innerStopListening();
+            }
+            stopForeground(true);
+        } else if (state == STATE_LISTENING) {
+            audioHandler.post(() -> {
+                if (audioRecord != null) flushAudioRecord();
+                audioMemory.clear();
+                paused = false;
+            });
+        }
+        showToast(getString(R.string.widget_deleted));
+    }
+
+    /** Close the file being recorded and remove it. Must run on the audio thread. */
+    private void closeAndDeleteUnsavedFile() {
+        if (wavFileWriter != null) {
+            try {
+                wavFileWriter.close();
+            } catch (IOException e) {
+                Log.e(TAG, "Error closing unsaved recording", e);
+            }
+            wavFileWriter = null;
+        }
+        if (wavFile != null) {
+            if (wavFile.exists() && !wavFile.delete()) {
+                Log.w(TAG, "Could not delete unsaved recording " + wavFile.getAbsolutePath());
+            }
+            wavFile = null;
         }
     }
 

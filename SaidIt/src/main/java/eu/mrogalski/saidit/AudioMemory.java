@@ -44,6 +44,20 @@ public class AudioMemory {
         return (free.size() + filled.size() + (current == null ? 0 : 1)) * CHUNK_SIZE;
     }
 
+    /** Throw away buffered audio, but keep the allocated chunks for reuse. */
+    synchronized public void clear() {
+        if (current != null) {
+            free.addLast(current);
+            current = null;
+        }
+        while (!filled.isEmpty()) {
+            free.addLast(filled.removeFirst());
+        }
+        offset = 0;
+        currentWasFilled = false;
+        filling = false;
+    }
+
     public interface Consumer {
         public int consume(byte[] array, int offset, int count) throws IOException;
     }

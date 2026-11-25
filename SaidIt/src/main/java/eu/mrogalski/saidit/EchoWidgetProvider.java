@@ -15,7 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Resizable home-screen widget with Start, Pause, Stop and Save buttons.
+ * Resizable home-screen widget with Start, Pause, Stop, Save and Delete buttons.
  *
  * The buttons send actions to {@link SaidItService}, which does the actual work and then calls
  * {@link #setStatus(Context, String)} so every widget shows the current status.
@@ -65,13 +65,13 @@ public class EchoWidgetProvider extends AppWidgetProvider {
             // Android 12+: the launcher picks the layout that fits as the widget is resized.
             Map<SizeF, RemoteViews> sizes = new HashMap<>();
             sizes.put(new SizeF(40f, 40f), compact);
-            sizes.put(new SizeF(220f, 40f), full);
+            sizes.put(new SizeF(260f, 40f), full);
             return new RemoteViews(sizes);
         }
         // Android 11: pick by the current width reported by the launcher.
         Bundle options = manager.getAppWidgetOptions(id);
         int minWidth = options == null ? 0 : options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0);
-        return minWidth > 0 && minWidth < 220 ? compact : full;
+        return minWidth > 0 && minWidth < 260 ? compact : full;
     }
 
     private static RemoteViews buildLayout(Context context, int layout, String status) {
@@ -82,6 +82,7 @@ public class EchoWidgetProvider extends AppWidgetProvider {
         views.setOnClickPendingIntent(R.id.widget_pause, action(context, SaidItService.ACTION_WIDGET_PAUSE, 2));
         views.setOnClickPendingIntent(R.id.widget_stop, action(context, SaidItService.ACTION_WIDGET_STOP, 3));
         views.setOnClickPendingIntent(R.id.widget_save, action(context, SaidItService.ACTION_WIDGET_SAVE, 4));
+        views.setOnClickPendingIntent(R.id.widget_delete, action(context, SaidItService.ACTION_WIDGET_DELETE, 6));
         Intent open = new Intent(context, SaidItActivity.class);
         views.setOnClickPendingIntent(R.id.widget_status, PendingIntent.getActivity(
                 context, 5, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
