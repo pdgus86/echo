@@ -24,12 +24,14 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemClock;
 import androidx.core.app.NotificationCompat;
-import android.text.format.DateUtils;
 import android.util.Log;
 import android.widget.Toast;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 import simplesound.pcm.WavAudioFormat;
 import simplesound.pcm.WavFileWriter;
@@ -51,6 +53,27 @@ public class SaidItService extends Service {
 
     HandlerThread audioThread;
     Handler audioHandler; // used to post messages to audio thread
+    final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    // Actions sent by the home-screen widget (see EchoWidgetProvider).
+    static final String ACTION_WIDGET_START = "eu.mrogalski.saidit.action.WIDGET_START";
+    static final String ACTION_WIDGET_PAUSE = "eu.mrogalski.saidit.action.WIDGET_PAUSE";
+    static final String ACTION_WIDGET_STOP = "eu.mrogalski.saidit.action.WIDGET_STOP";
+    static final String ACTION_WIDGET_SAVE = "eu.mrogalski.saidit.action.WIDGET_SAVE";
+    static final String ACTION_WIDGET_DELETE = "eu.mrogalski.saidit.action.WIDGET_DELETE";
+
+    // Second tap on Delete must arrive within this window, or the first tap is ignored.
+    private static final long DELETE_CONFIRM_WINDOW_MS = 3000;
+    private long deleteConfirmUntil = 0;
+
+    // Save "everything in memory" (clamped to what is actually buffered).
+    static final float ALL_MEMORY_SECONDS = 60 * 60 * 24 * 365;
+
+    // While paused, audio coming from the microphone is read and thrown away:
+    // it is neither written to the current recording file nor kept in memory.
+    // `paused` is only changed on the audio thread; `pauseRequested` is the main-thread view of it.
+    volatile boolean paused = false;
+    boolean pauseRequested = false;
 
     @Override
     public void onCreate() {
@@ -77,6 +100,10 @@ public class SaidItService extends Service {
         stopRecording(null, "");
         innerStopListening();
         stopForeground(true);
+        pauseRequested = false;
+        audioHandler.post(() -> paused = false);
+        state = STATE_READY;
+        publishState();
     }
 
     @Override
@@ -144,6 +171,7 @@ public class SaidItService extends Service {
                     audioRecord.release();
                     audioRecord = null;
                     state = STATE_READY;
+                    publishState();
                     return;
                 }
 
@@ -155,7 +183,7 @@ public class SaidItService extends Service {
                 audioHandler.post(audioReader);
             }
         });
-
+        publishState();
 
     }
 
@@ -169,6 +197,7 @@ public class SaidItService extends Service {
         }
         state = STATE_READY;
         Log.d(TAG, "Queueing: STOP LISTENING");
+        if (pauseRequested) setPaused(false);
 
         stopForeground(true);
         stopService(new Intent(this, this.getClass()));
@@ -183,6 +212,7 @@ public class SaidItService extends Service {
                 audioMemory.allocate(0);
             }
         });
+        publishState();
 
     }
 
@@ -199,12 +229,14 @@ public class SaidItService extends Service {
                 int skipBytes = Math.max(0, bytesAvailable - prependBytes);
 
                 int useBytes = bytesAvailable - skipBytes;
-                long millis  = System.currentTimeMillis() - 1000 * useBytes / FILL_RATE;
-                final int flags = DateUtils.FORMAT_SHOW_TIME | DateUtils.FORMAT_SHOW_WEEKDAY | DateUtils.FORMAT_SHOW_DATE;
-                final String dateTime = DateUtils.formatDateTime(SaidItService.this, millis, flags);
-                String filename = "Echo - " + dateTime + ".wav";
-                if(!newFileName.equals("")){
-                    filename = newFileName + ".wav";
+                if(useBytes <= 0) {
+                    mainHandler.post(() -> showToast(getString(R.string.nothing_to_save)));
+                    return;
+                }
+                long millis  = System.currentTimeMillis() - 1000L * useBytes / FILL_RATE;
+                String filename = timestampedFileName(millis);
+                if(newFileName != null && !newFileName.trim().equals("")){
+                    filename = newFileName.trim() + ".wav";
                 }
 
                 File storageDir;
@@ -219,6 +251,13 @@ public class SaidItService extends Service {
                     storageDir.mkdir();
                 }
                 File file = new File(storageDir, filename);
+                if(file.exists() && filename.startsWith("Echo_")) {
+                    // Two saves in the same second: keep both instead of overwriting.
+                    String base = filename.substring(0, filename.length() - ".wav".length());
+                    for(int n = 2; file.exists(); n++) {
+                        file = new File(storageDir, base + "_" + n + ".wav");
+                    }
+                }
 
                 // Create the file if it doesn't exist
                 if (!file.exists()) {
@@ -279,6 +318,8 @@ public class SaidItService extends Service {
                 return;
         }
         state = STATE_RECORDING;
+        // Starting a new recording (from the app or the widget) always un-pauses.
+        if (pauseRequested) setPaused(false);
 
         audioHandler.post(new Runnable() {
             @Override
@@ -290,10 +331,8 @@ public class SaidItService extends Service {
                 int skipBytes = Math.max(0, bytesAvailable - prependBytes);
 
                 int useBytes = bytesAvailable - skipBytes;
-                long millis  = System.currentTimeMillis() - 1000 * useBytes / FILL_RATE;
-                final int flags = DateUtils.FORMAT_SHOW_TIME | DateUtils.FORMAT_SHOW_WEEKDAY | DateUtils.FORMAT_SHOW_DATE;
-                final String dateTime = DateUtils.formatDateTime(SaidItService.this, millis, flags);
-                String filename = "Echo - " + dateTime + ".wav";
+                long millis  = System.currentTimeMillis() - 1000L * useBytes / FILL_RATE;
+                String filename = timestampedFileName(millis);
 
                 File storageDir;
                 if(isExternalStorageWritable()){
@@ -301,6 +340,9 @@ public class SaidItService extends Service {
                     storageDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "Echo");
                 }else{
                     storageDir = new File(getFilesDir(), "Echo");
+                }
+                if(!storageDir.exists()){
+                    storageDir.mkdirs();
                 }
                 final String storagePath = storageDir.getAbsolutePath();
 
@@ -344,7 +386,7 @@ public class SaidItService extends Service {
                 }
             }
         });
-
+        publishState();
     }
 
     public long getMemorySize() {
@@ -423,6 +465,7 @@ public class SaidItService extends Service {
         }
 
         stopForeground(true);
+        publishState();
     }
 
     private void flushAudioRecord() {
@@ -449,7 +492,8 @@ public class SaidItService extends Service {
                 Log.e(TAG, "AUDIO RECORD ERROR - UNKNOWN ERROR");
                 return 0;
             }
-            if (wavFileWriter != null && read > 0) {
+            final boolean discard = paused;
+            if (!discard && wavFileWriter != null && read > 0) {
                 wavFileWriter.write(array, offset, read);
             }
             if (read == count) {
@@ -466,7 +510,8 @@ public class SaidItService extends Service {
                 delaySeconds = Math.min(delaySeconds, bufferSizeInSeconds * 0.9f);
                 audioHandler.postDelayed(audioReader, (long)(delaySeconds * 1000));
             }
-            return read;
+            // When paused, report that nothing was stored so the bytes just read get overwritten.
+            return discard ? 0 : Math.max(read, 0);
         }
     };
     final Runnable audioReader = new Runnable() {
@@ -532,7 +577,206 @@ public class SaidItService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        if (intent != null && intent.getAction() != null) {
+            handleWidgetAction(intent.getAction());
+        }
         return START_STICKY;
+    }
+
+    // ---- Widget controls -------------------------------------------------
+
+    /** File name used for every automatically named recording, e.g. Echo_2026-11-16_09-27-45.wav */
+    static String timestampedFileName(long millis) {
+        return "Echo_" + new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(new Date(millis)) + ".wav";
+    }
+
+    private void handleWidgetAction(String action) {
+        Log.d(TAG, "Widget action: " + action);
+        if (!ACTION_WIDGET_DELETE.equals(action)) {
+            deleteConfirmUntil = 0;
+        }
+        switch (action) {
+            case ACTION_WIDGET_START:
+                widgetStart();
+                break;
+            case ACTION_WIDGET_PAUSE:
+                widgetPause();
+                break;
+            case ACTION_WIDGET_STOP:
+                widgetStop();
+                break;
+            case ACTION_WIDGET_SAVE:
+                widgetSave();
+                break;
+            case ACTION_WIDGET_DELETE:
+                widgetDelete();
+                break;
+        }
+        if (state != STATE_READY) {
+            // stopRecording() drops the foreground notification; keep the service in the foreground
+            // while it is still using the microphone.
+            startForeground(FOREGROUND_NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        }
+        publishState();
+    }
+
+    /** Start: resume if paused, otherwise begin recording to a new file from this moment. */
+    void widgetStart() {
+        if (pauseRequested) {
+            setPaused(false);
+            if (state == STATE_RECORDING) {
+                showToast(getString(R.string.widget_resumed));
+                return;
+            }
+        }
+        if (state == STATE_RECORDING) return;
+        if (state == STATE_READY) {
+            enableListening();
+        }
+        startRecording(0);
+        showToast(getString(R.string.widget_started));
+    }
+
+    /** Pause: keep everything already captured, but ignore the microphone until Start is pressed. */
+    void widgetPause() {
+        if (state == STATE_READY) {
+            showToast(getString(R.string.widget_not_running));
+            return;
+        }
+        if (pauseRequested) return;
+        setPaused(true);
+        showToast(getString(R.string.widget_paused));
+    }
+
+    /** Stop: save what has been captured (no extra step needed), then turn Echo off. */
+    void widgetStop() {
+        if (state == STATE_READY) {
+            setPaused(false);
+            showToast(getString(R.string.widget_not_running));
+            return;
+        }
+        saveCurrent();
+        // Runs on the audio thread after the save above has finished reading audio.
+        pauseRequested = false;
+        audioHandler.post(() -> paused = false);
+        disableListening();
+        stopForeground(true);
+        stopSelf();
+    }
+
+    /** Save: write what has been captured so far to a file, and keep going. */
+    void widgetSave() {
+        if (state == STATE_READY) {
+            showToast(getString(R.string.nothing_to_save));
+            return;
+        }
+        final boolean wasRecording = state == STATE_RECORDING;
+        saveCurrent();
+        if (wasRecording) {
+            // Continue into a fresh file so the recording carries on.
+            startRecording(0);
+        }
+    }
+
+    /**
+     * Delete: throw away the unsaved recording and the memory buffer, then stop recording.
+     * Already-saved files in the library are left alone.
+     * The first tap only asks for confirmation; a second tap within 3 seconds does the delete.
+     */
+    void widgetDelete() {
+        if (state == STATE_READY) {
+            deleteConfirmUntil = 0;
+            showToast(getString(R.string.widget_nothing_to_delete));
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (now > deleteConfirmUntil) {
+            deleteConfirmUntil = now + DELETE_CONFIRM_WINDOW_MS;
+            showToast(getString(R.string.widget_tap_again_to_delete));
+            return;
+        }
+        deleteConfirmUntil = 0;
+
+        pauseRequested = false;
+        if (state == STATE_RECORDING) {
+            state = STATE_LISTENING;
+            audioHandler.post(() -> {
+                flushAudioRecord();
+                closeAndDeleteUnsavedFile();
+                audioMemory.clear();
+                paused = false;
+            });
+            final SharedPreferences preferences = this.getSharedPreferences(PACKAGE_NAME, MODE_PRIVATE);
+            if (!preferences.getBoolean(AUDIO_MEMORY_ENABLED_KEY, true)) {
+                innerStopListening();
+            }
+            stopForeground(true);
+        } else if (state == STATE_LISTENING) {
+            audioHandler.post(() -> {
+                if (audioRecord != null) flushAudioRecord();
+                audioMemory.clear();
+                paused = false;
+            });
+        }
+        showToast(getString(R.string.widget_deleted));
+    }
+
+    /** Close the file being recorded and remove it. Must run on the audio thread. */
+    private void closeAndDeleteUnsavedFile() {
+        if (wavFileWriter != null) {
+            try {
+                wavFileWriter.close();
+            } catch (IOException e) {
+                Log.e(TAG, "Error closing unsaved recording", e);
+            }
+            wavFileWriter = null;
+        }
+        if (wavFile != null) {
+            if (wavFile.exists() && !wavFile.delete()) {
+                Log.w(TAG, "Could not delete unsaved recording " + wavFile.getAbsolutePath());
+            }
+            wavFile = null;
+        }
+    }
+
+    /** Finishes the file being recorded, or, if only the memory buffer is running, saves the whole buffer. */
+    private void saveCurrent() {
+        final WavFileReceiver receiver = new WidgetFileReceiver();
+        if (state == STATE_RECORDING) {
+            stopRecording(receiver, "");
+        } else if (state == STATE_LISTENING) {
+            dumpRecording(ALL_MEMORY_SECONDS, receiver, "");
+        }
+    }
+
+    private void setPaused(final boolean value) {
+        pauseRequested = value;
+        // Flush audio up to this moment using the old setting, then switch.
+        audioHandler.post(() -> {
+            if (audioRecord != null) flushAudioRecord();
+            paused = value;
+        });
+    }
+
+    /** Shows a short confirmation and the usual "Recording saved" notification. */
+    class WidgetFileReceiver implements WavFileReceiver {
+        @Override
+        public void fileReady(final File file, float runtime) {
+            mainHandler.post(() -> showToast(getString(R.string.widget_saved, file.getName())));
+            new SaidItFragment.NotifyFileReceiver(SaidItService.this).fileReady(file, runtime);
+        }
+    }
+
+    /** Remembers the current status and redraws any home-screen widgets. */
+    void publishState() {
+        mainHandler.post(() -> {
+            final String status;
+            if (state == STATE_READY) status = EchoWidgetProvider.STATUS_STOPPED;
+            else if (pauseRequested) status = EchoWidgetProvider.STATUS_PAUSED;
+            else if (state == STATE_RECORDING) status = EchoWidgetProvider.STATUS_RECORDING;
+            else status = EchoWidgetProvider.STATUS_LISTENING;
+            EchoWidgetProvider.setStatus(SaidItService.this, status);
+        });
     }
 
     // Workaround for bug where recent app removal caused service to stop
